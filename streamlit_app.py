@@ -5,36 +5,47 @@
 import streamlit as st
 import gpxpy
 import folium
-import srtm
-import math
 from streamlit_folium import st_folium
 from io import StringIO
+import elevation
+import rasterio
+from rasterio.plot import show
+from rasterio.warp import transform
+import math
+import os
 
+# Configure Streamlit
 st.set_page_config(page_title="Drive Alive Risk Analyzer", layout="wide")
-
 st.title("Drive Alive - Route Risk Analyzer")
 st.markdown("Upload your GPX file and we’ll identify hidden bends and crests based on curvature and elevation gain.")
 
 uploaded_file = st.file_uploader("Choose a GPX file", type="gpx")
 
+# Download elevation data tile (once)
+elevation_data_path = "howqua_hills_dem.tif"
+if not os.path.exists(elevation_data_path):
+    elevation.clip(bounds=(144.5, -38, 146, -37), output=elevation_data_path)
+
 if uploaded_file:
     gpx = gpxpy.parse(uploaded_file)
 
-    # Extract points
     points = []
     for track in gpx.tracks:
         for segment in track.segments:
             for point in segment.points:
                 points.append((point.latitude, point.longitude))
 
-    # Elevation data
-    elevation_data = srtm.get_data()
-    elevation_data.load()
+    # Load raster
+    dataset = rasterio.open(elevation_data_path)
 
+    # Add elevation to points
     elevated_points = []
     for lat, lon in points:
-        elev = elevation_data.get_elevation(lat, lon)
-        if elev is None:
+        try:
+            lon_t, lat_t = transform('EPSG:4326', dataset.crs, [lon], [lat])
+            row, col = dataset.index(lon_t[0], lat_t[0])
+            elev = dataset.read(1)[row, col]
+        except:
             elev = 0
         elevated_points.append((lat, lon, elev))
 
@@ -65,7 +76,7 @@ if uploaded_file:
 
     # Create map
     m = folium.Map(location=[points[0][0], points[0][1]], zoom_start=13)
-    folium.PolyLine(points, color="blue", weight=3, opacity=0.8).add_to(m)
+    folium.PolyLine([(p[0], p[1]) for p in points], color="blue", weight=3, opacity=0.8).add_to(m)
 
     for segment in risk_segments:
         if segment['risk'] > 40:
